@@ -1,43 +1,58 @@
 
-//FlowMeter code version 1.0 - September 2015
-//Please enjoy responsibly
-//Added buzzer and decided that the core functionality was ready for v. 1.0. 
+//FlowMeter code version 1.1 - November 2015
 
-int brewPin = 3;            //Brew switch on pin 3 and gnd.
-int pumpPin = 11;           //pump relay on pin 11 and gnd. Relay in 1
-int valvePin = 12;          //valve relay on pin 12 and gnd. Relay in 2
-int buzzPin = 8;            //Buzzer on pin 8
-int held = 0;               //For how long has the button been engaged
-int backF = 0 ;             //Number of backflush cycles counter
-int stat = 0;               //Status from from the backflush to establish nominal or abort status
-int timer = 0;              //For how many seconds the individual backFlush cycle should last. In milli seconds. See code.
-int brewSwitch;             //Reading of brewSwitch
-int flowMeter = 2;          //FlowMeter on pin 2, Digimesa
-volatile int flowCount = 0; //Number of ticks from the flow meter. (1925 ticks per liter)
-int flowCalib = 85 ;        //__--´´Calibrate here´´--__ ca. 2.3 tick/g
-float startTime = 0.00;     //Brew timer start
-float currentTime = 0.00;   //Brew time rigth now
-float elapsedTime = 0.00;   //Brew time 
-long maxBrewTime = 40000;   //max allowed brewTime: incl. infusiontime
- 
-                             
+//Please enjoy responsibly
+
+//Updated the frequency method to be recalculated at every tick. Code clean up. Longer BackFlush rutine
+
+//Test cases to be run at the end of this file.
+
+
+
+//FOR CALIBRATION
+int flowCalib = 89 ;            //Number of ticks for the perfect espresso. Ca. 2.3 tick/g. 85 ticks for ~36g
+float freqLimit = 10.00;        //Frequency for proper puck resistance.
+
+//SETTINGS
+long maxBrewTime = 37500;       //max allowed brewTime: incl. infusiontime. In milliseconds.
+long HeatFlushTime = 3500;      //Flushtime in milliseconds.
+int NumberOfBackflushes = 9;    //How many times you would like to back flush. Count from 0, so 9 = 10 times
+long BackFlushPumpTime = 10000; //Backflush pump engage time.
+long BackFlushPauseTime = 15000;//Backflush pause time.
+int PreInNum = 4;               //Number of pre infusions. Total preinfusin time = PreInNum * PreInPump * PreInPause
+int PreInPump = 1000;           //Preinfusion pump time. In milliseconds.
+int PreInPause = 1000;          //Preinfusion pause time. In milliseconds.
+int freqUpInt = 5;              //How often should the frequency be updated. Number of ticks. 
+
+
+//INVARIABLES
+int brewPin = 3;                //Brew switch on pin 3 and gnd.
+int pumpPin = 11;               //pump relay on pin 11 and gnd. Relay in 1
+int valvePin = 12;              //valve relay on pin 12 and gnd. Relay in 2
+int buzzPin = 8;                //Buzzer on pin 8
+int held = 0;                   //For how long has the button been engaged
+int backF = 0 ;                 //Number of backflush cycles counter
+int stat = 0;                   //Status from from the backflush to establish nominal or abort status
+long timer = 0;                 //Helper counter.
+int brewSwitch;                 //Reading of brewSwitch
+int flowMeter = 2;              //FlowMeter on pin 2, Digimesa
+volatile int flowCount = 0;     //Number of ticks from the flow meter. (1925 ticks per liter)
+float startTime = 0.00;         //Brew timer start
+float currentTime = 0.00;       //Brew time rigth now
+float elapsedTime = 0.00;       //Brew time 
 //Variables for frequncy measurements
 volatile float tickFreq = 100.00; //Frequency of the flowmeter incoming tics.
-int flushing = 200;               //If the tickFreq reached this number, we are flusing not brewing. Needs calibrating.
-long timeOld = 0;                 //For measuring frequency.
-int freqUpInt = 5;                //How often should the frequency be updated. Number of ticks. 
-int oldFlowCount = 0;             //Stored flowcount value.
-int freqChangeDetected = 0;       //For frequency change detection.
-int freqLimit = 10;               //Frequency for puck resistance. Should also be calibrated.
-long freqChangeTime = 0;          //The time the frequency changed happened
-
+long timeOld = 0;               //For measuring frequency.
+int freqChangeDetected = 0;     //For frequency change detection.
+long freqChangeTime = 0;        //The time the frequency changed happened
+int oldFlowCount = 0;           //Stored flowcount value.
 //Variables for pre-infusion
-int preInCount = 0; 
+int preInCount = 0;             //Helper counter.
 
 // The following variables are long's because the time, measured in miliseconds,
 // will quickly become a bigger number than can be stored in an int.
-long time = 0;         // the last time the output pin was toggled
-long debounce = 500;   // the debounce time, increase if the output flickers
+long time = 0;                  // the last time the output pin was toggled
+long debounce = 450;            // the debounce time, increase if the output flickers
 
 void setup() {
   // Brew switch on pin 3 and gnd.
@@ -59,7 +74,7 @@ void setup() {
   //Flowmeter on input 2.
   pinMode(flowMeter, INPUT);
   
-  //Makes sure that we count the ticks from the flow meter and the interrupt is attached.
+  //Makes sure that we count the ticks from the flow meter and that the interrupt is attached.
   attachInterrupt(0, flowTics, RISING); 
   
   //Enable console output.
@@ -90,7 +105,7 @@ void loop() {
     //turn off the buzzer
     digitalWrite(buzzPin, LOW);
     
-    if (held > 0 && held <= 10){
+    if (held > 1 && held <= 10){
     //Start brewing, first Preinfusion, then brew
     Serial.println("BrewMode Enabled");
 
@@ -103,17 +118,17 @@ void loop() {
     startTime = millis();
     
     //run the preinfusion program
-    stat = preInfuse();
+    stat = preInfuse();               //Invert the comment status on this line and the next for disabling preinfusion.
     //digitalWrite(valvePin, LOW);
 
     if ( stat == 0) { //if stat is 0 the preinfuse process was completed and we can continue the brew process
       Serial.println("Pre-infusing ended");
       
       //Reset the ticks frequncy counter and the associated timer
-      tickFreq = 0;
+      tickFreq = 0.0;
       timeOld = millis();
-      oldFlowCount = 0;
       freqChangeDetected = 0; 
+      oldFlowCount = 0;
     
       //Turn on pump to start brewing
       Serial.println("Flowmeter controlled brew start");   
@@ -133,6 +148,7 @@ void loop() {
         if (tickFreq != 0 && millis() % 100 == 0){ 
           freqChangeDetected = detectFreqChange();
         }
+        //Print time
         if ((int)elapsedTime % 100 == 0){
           Serial.print("            Time: ");
           Serial.print(elapsedTime/1000);
@@ -170,7 +186,9 @@ void loop() {
         brewSwitch = digitalRead(brewPin);
         currentTime = millis();
         elapsedTime = currentTime - startTime;
-                     
+                
+
+        
         if(brewSwitch == LOW && millis() - time > debounce ){
             flowCount = 1000000;
             Serial.println("--Brew Abort--");            
@@ -202,7 +220,7 @@ void loop() {
     time = millis();//reset button time
     digitalWrite(pumpPin, LOW);
     digitalWrite(valvePin, LOW);
-    while ( timer <= 3800) { //HeatFlush time
+    while ( timer <= HeatFlushTime) { 
       brewSwitch = digitalRead(brewPin);  
       if (brewSwitch == LOW && millis() - time > debounce){
         //Abort
@@ -223,14 +241,14 @@ void loop() {
     time = millis();//reset button time 
     backF = 0;
     stat = 0;
-    while (stat == 0 and backF <= 4){
+    while (stat == 0 and backF <= NumberOfBackflushes){
       stat = backFlush();
       turnOff();
       if (stat == 0) {
         timer = 0;
       }
       Serial.println("BackFlush paused");
-      while ( timer <= 10000 && stat == 0 ) { //Time the flush should be paused
+      while ( timer <= BackFlushPauseTime && stat == 0 ) { //Time the flush should be paused
         brewSwitch = digitalRead(brewPin);
         if (brewSwitch == LOW && millis() - time > debounce){
           Serial.println("---BackFlushMode Abort---");
@@ -242,7 +260,7 @@ void loop() {
       }
      backF++;
     }
-    //When the back flusing is done, sound the horn to notify me a.k.a. the cleaner. 
+    //When the back flusing is done, sound the horn to notify me a.k.a. the cleaner, that cleaning is done. 
     int i = 0;
     while ( i < 4){
       digitalWrite(buzzPin,HIGH);
@@ -263,11 +281,11 @@ void loop() {
     preInCount = 0;
     //Activate the 3-way valve to maintain pressure in grouphead. This will not be turned off until the turnOff() function is called. 
     digitalWrite(valvePin, LOW);
-    while (preInCount < 4){
+    while (preInCount < PreInNum){
       Serial.print("Pre-infusing cycle: ");
       Serial.println(preInCount);       
       digitalWrite(pumpPin, LOW);
-      while ( timer <= 1000) { //Time the pump should be activted in the preinfusion 
+      while ( timer <= PreInPump) { //Time the pump should be activted in the preinfusion 
         brewSwitch = digitalRead(brewPin);
         if (brewSwitch == LOW && millis() - time > debounce){
           Serial.println("---PreInfusion Abort---");
@@ -283,7 +301,7 @@ void loop() {
         timer = 0; 
       }
       digitalWrite(pumpPin, HIGH);
-      while ( timer <= 1000) { //Time the pump should be paused in the preinfusion
+      while ( timer <= PreInPause) { //Time the pump should be paused in the preinfusion
         brewSwitch = digitalRead(brewPin);
         if (brewSwitch == LOW && millis() - time > debounce){
           Serial.println("---PreInfusion Abort---");
@@ -344,11 +362,11 @@ void loop() {
     Serial.print("Cycle ");
     Serial.println(backF);
     timer = 0;
-    while ( timer <= 10000) { //Time the flush should be engaged
+    while ( timer <= BackFlushPumpTime) { //Time the flush should be engaged
       brewSwitch = digitalRead(brewPin);
       if (brewSwitch == LOW && millis() - time > debounce){
         Serial.println("---BackFlushMode Abort---");
-        timer=20000;
+        timer=200000;
         //Abort return
       }      
       delay(1);
@@ -375,7 +393,7 @@ void loop() {
       Serial.println(" Hz");
     } 
   }
-
+  
   int detectFreqChange(){
     //if all variables are below the limit a frequency change has been detected
     if (tickFreq <= freqLimit ){
@@ -387,6 +405,27 @@ void loop() {
     else
       return 0;
   }
+
+// --------------- Test cases: ---------------
+// Test succes
+//Brew - timers and freqchange must work.
+//Brew - When no freqchange detected, stop after preset time.
+//Heatflush - stop after set time.
+//Backflush - Sounde the horn after ended rutine.
+
+//Test aborts
+//Brew:
+//Abort when prein pump is active.
+//Abort when prein pump is paused.
+//Abort when detecting for freqchange.
+//Abort when counting ticks.
+
+//Heatflush:
+//Abort while the pump is running
+
+//Backflush:
+//Abort while pump is engaged
+//Abort while pump is paused
 
 
   
